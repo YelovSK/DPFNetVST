@@ -78,6 +78,9 @@ Denoiser::Denoiser(Ort::Env& env, const std::filesystem::path& modelPath)
 	binding.BindOutput(outSpecName.c_str(), specOutTensor);
 
 	reset();
+	// The first run does lazy allocations and is much slower; get it out of the way before real-time use.
+	processFrame();
+	reset();
 }
 
 void Denoiser::reset()

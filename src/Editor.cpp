@@ -15,7 +15,7 @@ namespace
 {
 	constexpr wchar_t className[] = L"DPDFNetEditor";
 	constexpr int width = 400;
-	constexpr int height = 132;
+	constexpr int height = 116;
 	constexpr int labelWidth = 120;
 	constexpr int controlX = 140;
 
@@ -82,7 +82,7 @@ bool Editor::open(HWND parent)
 	limitText = createControl(WC_STATICW, L"", SS_LEFT, controlX + 196, 54, 56, 20);
 	showLimit(limitSliderPosition(plugin.getParameter(Plugin::paramAttenLimit)));
 
-	statusText = createControl(WC_STATICW, L"", SS_LEFT, 12, 88, width - 24, 36);
+	statusText = createControl(WC_STATICW, L"", SS_LEFT, 12, 88, width - 24, 20);
 	showStatus();
 	return true;
 }
