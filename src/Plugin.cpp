@@ -134,8 +134,12 @@ void Plugin::fail(const std::string& message)
 	error = message;
 }
 
-void Plugin::loadModel(int index)
+bool Plugin::updateModel()
 {
+	const int index = modelIndex(getParameter(paramModel));
+	if (sampleRate != Denoiser::sampleRate || index == attemptedModel)
+		return false;
+
 	attemptedModel = index;
 	denoiser.reset();
 	{
@@ -151,16 +155,12 @@ void Plugin::loadModel(int index)
 	{
 		fail(e.what());
 	}
+	return true;
 }
 
 void Plugin::resume()
 {
-	if (sampleRate != Denoiser::sampleRate)
-		return;
-
-	if (modelIndex(getParameter(paramModel)) != attemptedModel)
-		loadModel(modelIndex(getParameter(paramModel)));
-	if (denoiser)
+	if (!updateModel() && denoiser)
 		denoiser->reset();
 
 	// Hosts feed silence into unconnected inputs; averaging them in would lower the level.
@@ -176,12 +176,7 @@ void Plugin::resume()
 
 void Plugin::processReplacing(float** inputs, float** outputs, int32_t frames)
 {
-	if (sampleRate == Denoiser::sampleRate && modelIndex(getParameter(paramModel)) != attemptedModel)
-	{
-		loadModel(modelIndex(getParameter(paramModel)));
-		if (denoiser)
-			denoiser->reset();
-	}
+	updateModel();
 
 	if (!denoiser || sampleRate != Denoiser::sampleRate)
 	{

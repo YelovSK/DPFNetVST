@@ -54,7 +54,8 @@ private:
 	intptr_t dispatch(int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
 	void processReplacing(float** inputs, float** outputs, int32_t frames);
 	void resume();
-	void loadModel(int index);
+	// Loads the selected model unless it was already tried; returns whether it did.
+	bool updateModel();
 	void fail(const std::string& message);
 
 	vst2::HostCallback host;
