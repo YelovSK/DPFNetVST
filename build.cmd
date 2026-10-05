@@ -6,6 +6,6 @@ if not defined VSDIR (
 	echo Visual Studio with C++ tools not found.
 	exit /b 1
 )
-call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 || exit /b 1
 cmake -S "%~dp0." -B "%~dp0build" -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
 cmake --build "%~dp0build" || exit /b 1
