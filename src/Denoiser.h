@@ -1,15 +1,13 @@
 #pragma once
 
 #include <filesystem>
-#include <string>
 #include <vector>
 
-#define ORT_API_MANUAL_INIT
-#include <onnxruntime_cxx_api.h>
+#include <native_api.h>
 
 #include "Stft.h"
 
-// Streams 48 kHz mono audio through a DPDFNet ONNX model, one 10 ms hop at a time.
+// Streams 48 kHz mono audio through a DPDFNet model, one 10 ms hop at a time.
 class Denoiser
 {
 public:
@@ -21,8 +19,12 @@ public:
 	static constexpr int modelDelayFrames = 4;
 	static constexpr int latencySamples = winLen + modelDelayFrames * hopLen;
 
-	// Throws std::exception (incl. Ort::Exception) if the model can't be loaded.
-	Denoiser(Ort::Env& env, const std::filesystem::path& modelPath);
+	// Runs INT8 where the CPU supports it (AVX2 + FMA), FP32 otherwise.
+	// Throws std::runtime_error if the weights can't be loaded.
+	Denoiser(const dpdf_native_api_v1& api, const std::filesystem::path& weightsPath);
+	~Denoiser();
+	Denoiser(const Denoiser&) = delete;
+	Denoiser& operator=(const Denoiser&) = delete;
 
 	void reset();
 	// Share of the original (noisy) spectrum mixed back in; 0 = full denoising.
@@ -32,20 +34,11 @@ public:
 private:
 	void processFrame();
 
-	Ort::Session session{nullptr};
-	Ort::IoBinding binding{nullptr};
-	Ort::RunOptions runOptions;
-	std::string inStateName, outStateName;
-
-	std::vector<float> initState;
-	std::vector<float> state[2];
-	Ort::Value stateTensor[2]{Ort::Value{nullptr}, Ort::Value{nullptr}};
-	int currentState = 0;
-
+	const dpdf_native_api_v1& api;
+	dpdf_native_model* model = nullptr;
+	std::vector<float> state;
 	std::vector<float> spec;
 	std::vector<float> specOut;
-	Ort::Value specTensor{nullptr};
-	Ort::Value specOutTensor{nullptr};
 
 	Stft stft{winLen};
 	std::vector<float> inFrame;

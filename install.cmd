@@ -19,7 +19,7 @@ if errorlevel 1 (
 )
 
 copy /y "%SRC%\DPDFNet.dll" "%DEST%\" >nul || goto failed
-robocopy "%SRC%\DPDFNet" "%DEST%\DPDFNet" /e /njh /njs /ndl /nfl >nul
+robocopy "%SRC%\DPDFNet" "%DEST%\DPDFNet" /mir /njh /njs /ndl /nfl >nul
 if errorlevel 8 goto failed
 echo Installed to %DEST%
 pause

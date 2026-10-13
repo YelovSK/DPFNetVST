@@ -4,18 +4,17 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 #include <windows.h>
 
-#include "OrtRuntime.h"
 
 namespace
 {
 	constexpr int32_t pluginVersion = 1000;
 	constexpr int maxChunk = 1024;
 
-	// Runtime and models live in a folder next to the plugin DLL, so hosts that scan
-	// for plugins don't mistake onnxruntime.dll for one.
+	// Model weights live in a folder next to the plugin DLL.
 	std::filesystem::path dataDir()
 	{
 		HMODULE module = nullptr;
@@ -29,8 +28,7 @@ namespace
 		return std::filesystem::path(path).parent_path() / L"DPDFNet";
 	}
 
-	std::filesystem::path ortPath() { return dataDir() / L"onnxruntime.dll"; }
-	std::filesystem::path modelPath(int index) { return dataDir() / Plugin::models[index].file; }
+	std::filesystem::path weightsPath(int index) { return dataDir() / Plugin::models[index].weightsFile; }
 
 	void copyString(void* dest, const char* src, size_t size)
 	{
@@ -112,11 +110,9 @@ std::wstring Plugin::status() const
 			return std::wstring(error.begin(), error.end());
 	}
 
-	for (const auto& path : {ortPath(), modelPath(modelIndex(getParameter(paramModel)))})
-	{
-		if (!std::filesystem::exists(path))
-			return L"Missing " + path.wstring();
-	}
+	const std::filesystem::path weights = weightsPath(modelIndex(getParameter(paramModel)));
+	if (!std::filesystem::exists(weights))
+		return L"Missing " + weights.wstring();
 
 	if (sampleRate != 0.0f && sampleRate != Denoiser::sampleRate)
 		return L"Bypassed: the device must run at 48 kHz";
@@ -149,7 +145,10 @@ bool Plugin::updateModel()
 
 	try
 	{
-		denoiser = std::make_unique<Denoiser>(ortEnv(ortPath()), modelPath(index));
+		const dpdf_native_api_v1* api = models[index].api(DPDF_NATIVE_ABI_VERSION);
+		if (api == nullptr)
+			throw std::runtime_error("Native model API version mismatch");
+		denoiser = std::make_unique<Denoiser>(*api, weightsPath(index));
 	}
 	catch (const std::exception& e)
 	{

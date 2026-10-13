@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include <dpdfnet2_48khz_hr/generated_model.h>
+#include <dpdfnet8_48khz_hr/generated_model.h>
+
 #include "Denoiser.h"
 #include "Editor.h"
 #include "vst2.h"
@@ -24,12 +27,13 @@ public:
 	struct Model
 	{
 		const char* name;
-		const wchar_t* file;
+		const wchar_t* weightsFile;
+		const dpdf_native_api_v1* (*api)(uint32_t abiVersion);
 	};
 
 	static constexpr Model models[] = {
-		{"DPDFNet-2", L"dpdfnet2_48khz_hr.onnx"},
-		{"DPDFNet-8", L"dpdfnet8_48khz_hr.onnx"},
+		{"DPDFNet-2", L"dpdfnet2_48khz_hr.weights.f32", dpdfnet2_48khz_hr_get_api},
+		{"DPDFNet-8", L"dpdfnet8_48khz_hr.weights.f32", dpdfnet8_48khz_hr_get_api},
 	};
 	static constexpr int modelCount = (int)std::size(models);
 	static constexpr float attenLimitMaxDb = 100.0f;

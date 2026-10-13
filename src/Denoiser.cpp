@@ -2,91 +2,56 @@
 
 #include <algorithm>
 #include <cstring>
-#include <sstream>
+#include <fstream>
 #include <stdexcept>
 
 namespace
 {
-	std::string metadata(const Ort::ModelMetadata& meta, const char* key)
+	std::vector<float> readWeights(const std::filesystem::path& path, size_t count)
 	{
-		Ort::AllocatorWithDefaultOptions allocator;
-		auto value = meta.LookupCustomMetadataMapAllocated(key, allocator);
-		if (!value)
-			throw std::runtime_error(std::string("Model is missing metadata '") + key + "'");
-		return value.get();
-	}
+		std::ifstream file(path, std::ios::binary | std::ios::ate);
+		if (!file)
+			throw std::runtime_error("Could not open " + path.string());
+		if ((size_t)file.tellg() != count * sizeof(float))
+			throw std::runtime_error(path.string() + " has the wrong size for this model");
 
-	std::vector<float> parseFloats(const std::string& csv)
-	{
-		std::vector<float> values;
-		std::istringstream stream(csv);
-		std::string item;
-		while (std::getline(stream, item, ','))
-			values.push_back(std::stof(item));
-		return values;
+		std::vector<float> weights(count);
+		file.seekg(0);
+		file.read((char*)weights.data(), count * sizeof(float));
+		if (!file)
+			throw std::runtime_error("Could not read " + path.string());
+		return weights;
 	}
 }
 
-Denoiser::Denoiser(Ort::Env& env, const std::filesystem::path& modelPath)
-	: spec(freqBins * 2), specOut(freqBins * 2), inFrame(winLen), outFrame(winLen),
-	  overlap(winLen), outQueue(hopLen), noisyHistory(modelDelayFrames * freqBins * 2)
+Denoiser::Denoiser(const dpdf_native_api_v1& api, const std::filesystem::path& weightsPath)
+	: api(api), state(api.state_size), spec(freqBins * 2), specOut(freqBins * 2), inFrame(winLen),
+	  outFrame(winLen), overlap(winLen), outQueue(hopLen), noisyHistory(modelDelayFrames * freqBins * 2)
 {
-	Ort::SessionOptions options;
-	options.SetIntraOpNumThreads(1);
-	options.SetInterOpNumThreads(1);
-	options.SetExecutionMode(ORT_SEQUENTIAL);
-	options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-	options.AddConfigEntry("session.intra_op.allow_spinning", "0");
-	options.AddConfigEntry("session.set_denormal_as_zero", "1");
-	session = Ort::Session(env, modelPath.c_str(), options);
+	if (api.sample_rate != sampleRate || api.hop_size != hopLen || api.spectrum_size != spec.size())
+		throw std::runtime_error("Model doesn't match the 48 kHz DPDFNet framing");
 
-	Ort::ModelMetadata meta = session.GetModelMetadata();
-	if (std::stoi(metadata(meta, "sample_rate")) != sampleRate || std::stoi(metadata(meta, "n_fft")) != winLen ||
-		std::stoi(metadata(meta, "hop_length")) != hopLen)
-		throw std::runtime_error("Model is not a 48 kHz DPDFNet model");
-
-	const size_t stateSize = std::stoul(metadata(meta, "state_size"));
-	const std::vector<float> erbNormInit = parseFloats(metadata(meta, "erb_norm_init"));
-	const std::vector<float> specNormInit = parseFloats(metadata(meta, "spec_norm_init"));
-	if (erbNormInit.size() + specNormInit.size() > stateSize)
-		throw std::runtime_error("Model state metadata is inconsistent");
-
-	// The state vector starts with the running ERB and spectrum normalization, the rest (RNN state) starts at zero.
-	initState.assign(stateSize, 0.0f);
-	std::copy(erbNormInit.begin(), erbNormInit.end(), initState.begin());
-	std::copy(specNormInit.begin(), specNormInit.end(), initState.begin() + erbNormInit.size());
-
-	Ort::AllocatorWithDefaultOptions allocator;
-	const std::string inSpecName = session.GetInputNameAllocated(0, allocator).get();
-	inStateName = session.GetInputNameAllocated(1, allocator).get();
-	const std::string outSpecName = session.GetOutputNameAllocated(0, allocator).get();
-	outStateName = session.GetOutputNameAllocated(1, allocator).get();
-
-	const Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-	const int64_t specShape[] = {1, 1, freqBins, 2};
-	const int64_t stateShape[] = {(int64_t)stateSize};
-	specTensor = Ort::Value::CreateTensor<float>(memory, spec.data(), spec.size(), specShape, 4);
-	specOutTensor = Ort::Value::CreateTensor<float>(memory, specOut.data(), specOut.size(), specShape, 4);
-	for (int i = 0; i < 2; i++)
-	{
-		state[i].resize(stateSize);
-		stateTensor[i] = Ort::Value::CreateTensor<float>(memory, state[i].data(), stateSize, stateShape, 1);
-	}
-
-	binding = Ort::IoBinding(session);
-	binding.BindInput(inSpecName.c_str(), specTensor);
-	binding.BindOutput(outSpecName.c_str(), specOutTensor);
+	const std::vector<float> weights = readWeights(weightsPath, api.weight_count);
+	const uint32_t preset =
+		api.preset_supported(DPDF_PRESET_INT8_SELECTIVE) ? DPDF_PRESET_INT8_SELECTIVE : DPDF_PRESET_FP32;
+	model = api.create(weights.data(), weights.size(), preset);
+	if (model == nullptr)
+		throw std::runtime_error("Could not create the model from " + weightsPath.string());
 
 	reset();
-	// The first run does lazy allocations and is much slower; get it out of the way before real-time use.
+	// Touch the model's working memory once before real-time use.
 	processFrame();
 	reset();
 }
 
+Denoiser::~Denoiser()
+{
+	api.destroy(model);
+}
+
 void Denoiser::reset()
 {
-	state[0] = initState;
-	currentState = 0;
+	api.init_state(state.data());
 	std::fill(inFrame.begin(), inFrame.end(), 0.0f);
 	std::fill(overlap.begin(), overlap.end(), 0.0f);
 	std::fill(noisyHistory.begin(), noisyHistory.end(), 0.0f);
@@ -120,10 +85,7 @@ void Denoiser::processFrame()
 {
 	stft.forward(inFrame.data(), spec.data());
 
-	binding.BindInput(inStateName.c_str(), stateTensor[currentState]);
-	binding.BindOutput(outStateName.c_str(), stateTensor[1 - currentState]);
-	session.Run(runOptions, binding);
-	currentState = 1 - currentState;
+	api.process(model, spec.data(), state.data(), specOut.data(), state.data());
 
 	// The enhanced frame lags the input by modelDelayFrames, so the noisy frame mixed back in is
 	// the one from that many frames ago.

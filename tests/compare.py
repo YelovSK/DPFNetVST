@@ -11,7 +11,9 @@ Without an input file, speech is synthesized with Windows' text-to-speech and mi
 """
 
 import ctypes as C
+import hashlib
 import subprocess
+import urllib.request
 import sys
 import time
 from pathlib import Path
@@ -28,6 +30,23 @@ WIN = 960
 HOP = 480
 PIPELINE_DELAY = WIN  # plugin output vs. the reference streamer's output
 MODEL_DELAY = 4 * HOP
+
+# The original ONNX exports, for the reference implementation.
+ONNX_MODELS = {
+    "dpdfnet2_48khz_hr": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b",
+    "dpdfnet8_48khz_hr": "7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631",
+}
+
+
+def onnx_model(name):
+    path = OUT / "models" / f"{name}.onnx"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"https://huggingface.co/Ceva-IP/DPDFNet/resolve/main/onnx/{name}.onnx"
+        data = urllib.request.urlopen(url).read()
+        assert hashlib.sha256(data).hexdigest() == ONNX_MODELS[name], f"{name}.onnx checksum mismatch"
+        path.write_bytes(data)
+    return path
 
 # --- minimal VST2 host -------------------------------------------------------
 
@@ -240,11 +259,12 @@ def main():
             assert np.array_equal(out[0], out[1]), "channels differ"
             mono = out[0]
             mix = 0.0 if limit_db is None else 10 ** (-limit_db / 20)
-            ref = reference_stream(PLUGIN.parent / "DPDFNet" / f"{model}.onnx", noisy, mix)
+            ref = reference_stream(onnx_model(model), noisy, mix)
             aligned = mono[PIPELINE_DELAY: PIPELINE_DELAY + len(ref)]
             ref = ref[: len(aligned)]
             parity = snr_db(ref, aligned)
-            ok = parity > 50
+            # The plugin runs DPDFNet's INT8 engine; its FP32 mode matches the reference to >130 dB.
+            ok = parity > 35
             failures += not ok
             line = f"{label:28s} parity vs reference {parity:6.1f} dB {'OK' if ok else 'FAIL'}"
             line += f" | {elapsed / (len(noisy) / SR) * 100:5.1f}% of real time"
@@ -255,6 +275,13 @@ def main():
                 d = mono[delay: delay + len(c)]
                 line += f" | lag {lag} (expected {delay}) | noise in pauses {noise_reduction_db(c, noisy[:len(c)], d):5.1f} dB"
                 failures += lag != delay
+                if limit_db is None:
+                    n = min(len(c), len(ref) - MODEL_DELAY)
+                    ref_quality = snr_db(c[:n], ref[MODEL_DELAY: MODEL_DELAY + n])
+                    quality = snr_db(c[:n], d[:n])
+                    ok = quality > ref_quality - 0.5
+                    failures += not ok
+                    line += f" | SNR vs clean: ONNX {ref_quality:.2f}, plugin {quality:.2f} dB {'OK' if ok else 'FAIL'}"
             print(line)
             sf.write(OUT / f"{model}_limit{'off' if limit_db is None else int(limit_db)}.wav", mono, SR)
 
