@@ -1,11 +1,7 @@
 #ifndef DPDF_DPRNN_H
 #define DPDF_DPRNN_H
 #include <stddef.h>
-#if defined(_WIN32)
-#define DPDF_API __declspec(dllexport)
-#else
-#define DPDF_API __attribute__((visibility("default")))
-#endif
+#define DPDF_API /* Private implementation declarations. */
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -24,7 +24,7 @@ dpdf_dense *dpdf_dense_create(const float *w,const float *bias,int k,int n,int p
     if ((precision==8 && !dpdf_has_avx2()) || (precision==16 && !dpdf_has_fp16())) return NULL;
     if (tiled && (tiled!=64 || n%64)) return NULL;
     dpdf_dense *d=calloc(1,sizeof(*d)); if (!d) return NULL;
-    d->k=k; d->n=n; d->kp=(k+7)/8*8; d->np=(n+31)/32*32; d->precision=precision;
+    d->k=k; d->n=n; d->kp=(k+7)/8*8; d->np=precision==8 ? (n+7)/8*8 : (n+31)/32*32; d->precision=precision; /* INT8 has an exact eight-output tail. */
     d->w=calloc((size_t)d->kp*d->np,sizeof(float));
     d->bias=calloc(d->np,sizeof(float));
     if (d->k!=d->kp) d->x=calloc((size_t)48*d->kp,sizeof(float));

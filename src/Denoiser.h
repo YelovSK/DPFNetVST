@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <vector>
 
-#include <native_api.h>
+#include <dpdfnet.h>
 
 #include "Stft.h"
 
@@ -19,9 +19,8 @@ public:
 	static constexpr int modelDelayFrames = 4;
 	static constexpr int latencySamples = winLen + modelDelayFrames * hopLen;
 
-	// Runs INT8 where the CPU supports it (AVX2 + FMA), FP32 otherwise.
-	// Throws std::runtime_error if the weights can't be loaded.
-	Denoiser(const dpdf_native_api_v1& api, const std::filesystem::path& weightsPath);
+	// Throws std::runtime_error if the CPU lacks AVX2/FMA or the weights can't be loaded.
+	Denoiser(dpdfnet_model_id id, const std::filesystem::path& weightsPath);
 	~Denoiser();
 	Denoiser(const Denoiser&) = delete;
 	Denoiser& operator=(const Denoiser&) = delete;
@@ -34,8 +33,8 @@ public:
 private:
 	void processFrame();
 
-	const dpdf_native_api_v1& api;
-	dpdf_native_model* model = nullptr;
+	const dpdfnet_model_id id;
+	dpdfnet_model* model = nullptr;
 	std::vector<float> state;
 	std::vector<float> spec;
 	std::vector<float> specOut;

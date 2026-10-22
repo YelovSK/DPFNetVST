@@ -1,4 +1,5 @@
 #include "full_ops.h"
+#include <math.h>
 
 /* Disjoint row-major input/output, including arbitrary edge dimensions. */
 void dpdf_transpose_scalar(const float *x,float *y,int rows,int cols) {
@@ -17,6 +18,11 @@ void dpdf_conv(dpdf_axpy_fn axpy, const float *x, const float *w, const float *b
                float *y, int ci, int hi, int wi, int co, int ho, int wo,
                int kh, int kw, int sh, int sw, int ph, int pw, int group) {
 #ifdef DPDF_X86_DISPATCH
+    if (axpy==dpdf_axpy_avx2 && dpdf_conv_row_pair_avx2(x,w,bias,y,ci,hi,wi,co,ho,wo,
+                                                    kh,kw,sh,sw,ph,pw,group)) return;
+    if (axpy==dpdf_axpy_avx2 && sw>1 &&
+        dpdf_depthwise_stride_avx2(x,w,bias,y,ci,hi,wi,co,ho,wo,
+                                   kh,kw,sh,sw,ph,pw,group)) return;
     if (axpy==dpdf_axpy_avx2 && dpdf_conv_row_avx2(x,w,bias,y,ci,hi,wi,co,ho,wo,
                                                kh,kw,sh,sw,ph,pw,group)) return;
 #endif
@@ -39,3 +45,41 @@ void dpdf_conv(dpdf_axpy_fn axpy, const float *x, const float *w, const float *b
         }
     }
 }
+
+/* Private graph helper: same scalar libm and separate FP32 operations.
+ * a/b: three disjoint contiguous 256-wide gates. out may equal old, a gate
+ * slice or a b gate slice; other partial overlap is outside this contract.
+ * Exception trap order is not promised; no fast-math/reassociation or FMA. */
+#if DPDF_MODEL_SIZE == 2
+static void dpdf_generated_gru256_scalar(const float *a,const float *b,
+#else
+void dpdf_generated_gru256_fused(const float *a,const float *b,
+#endif
+                               const float *old,float *out) {
+    for (int i=0;i<256;++i) {
+        float reset_sum=b[i]+a[i];
+        float reset=1.0f/(1.0f+expf(-reset_sum));
+        float update_sum=b[256+i]+a[256+i];
+        float update=1.0f/(1.0f+expf(-update_sum));
+        float reset_product=b[512+i]*reset;
+        float candidate_sum=a[512+i]+reset_product;
+        float candidate=tanhf(candidate_sum);
+        float difference=old[i]-candidate;
+        float update_product=difference*update;
+        out[i]=update_product+candidate;
+    }
+}
+#if DPDF_MODEL_SIZE == 2
+
+void dpdf_generated_gru256_fused(const float *a,const float *b,
+                               const float *old,float *out) {
+#ifdef DPDF_X86_DISPATCH
+    if (dpdf_has_avx2()) {
+        dpdf_generated_gru256_exact_avx2(a,b,old,out);
+        return;
+    }
+#endif
+    dpdf_generated_gru256_scalar(a,b,old,out);
+}
+#else
+#endif

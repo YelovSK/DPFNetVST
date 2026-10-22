@@ -183,40 +183,68 @@ int dpdf_process_layout(const dpdf_block *b, const float *input, const float *st
     float h[64], step[192];
     const float *bias=b->params,*fib=b->params+768,*nis=fib+64,*nib=nis+64;
     const float *tib=b->params+960,*thb=tib+192,*fob=b->params+1344,*nos=fob+64,*nob=nos+64;
-    if (layout_flags & DPDF_INPUT_FREQ_MAJOR)
-        memcpy(x,input,(size_t)f*64*sizeof(float));
-    else
+    const float *features=(layout_flags & DPDF_INPUT_FREQ_MAJOR)?input:x;
+#if DPDF_MODEL_SIZE == 2
+    if (!(layout_flags & DPDF_INPUT_FREQ_MAJOR)) {
+#ifdef DPDF_X86_DISPATCH
+        if (b->tier==DPDF_AVX2) dpdf_transpose_avx2(input,x,64,f);
+        else
+#endif
+#else
+    if (!(layout_flags & DPDF_INPUT_FREQ_MAJOR))
+#endif
         for (int r = 0; r < f; ++r)
             for (int c = 0; c < 64; ++c) x[r*64+c] = input[c*f+r];
+#if DPDF_MODEL_SIZE == 2
+    }
+#else
+#endif
     float *intra[2]={a,hproj};
 #if defined(DPDF_X86_DISPATCH) && !defined(DPDF_DISABLE_QAFFINE_PAIR)
-    if (b->q[0]) dpdf_qaffine_pair(b->q[0],b->q[1],x,bias,bias+384,a,hproj,f);
+    if (b->q[0]) dpdf_qaffine_pair(b->q[0],b->q[1],features,bias,bias+384,a,hproj,f);
 #endif
     for (int direction = 0; direction < 2; ++direction) {
         memset(h, 0, sizeof(h));
 #if defined(DPDF_X86_DISPATCH) && !defined(DPDF_DISABLE_QAFFINE_PAIR)
         if (!b->q[0])
 #endif
-            affine(b, x, direction*64*192, bias+direction*384, intra[direction], f, 64, 192);
+            affine(b, features, direction*64*192, bias+direction*384, intra[direction], f, 64, 192);
         for (int t = 0; t < f; ++t) {
             int r = direction == 0 ? t : f-1-t;
-            affine(b, h, 24576+direction*64*192, bias+direction*384+192, step, 1, 64, 192);
+#ifdef DPDF_X86_DISPATCH
+            if (t==0 && b->q[0]) {
+                const float *initial_bias=bias+direction*384+192;
+                for (int c=0;c<192;++c) step[c]=0.0f+initial_bias[c];
+            } else
+#endif
+                affine(b, h, 24576+direction*64*192, bias+direction*384+192, step, 1, 64, 192);
             b->gates(intra[direction]+r*192, step, h, h, 1);
             memcpy(bi+r*128+direction*64, h, sizeof(h));
         }
     }
     affine(b, bi, 49920, fib, p, f, 128, 64);
-    b->norm(mid, p, x, nis, nib, b->eps[0], f);
+    b->norm(mid, p, features, nis, nib, b->eps[0], f);
     affine(b, mid, 58304, tib, a, f, 64, 192);
     affine(b, state, 70592, thb, hproj, f, 64, 192);
     b->gates(a, hproj, state, state_out, f);
     affine(b, state_out, 83264, fob, p, f, 64, 64);
-    b->norm(x, p, mid, nos, nob, b->eps[1], f);
-    if (layout_flags & DPDF_OUTPUT_FREQ_MAJOR)
-        memcpy(output,x,(size_t)f*64*sizeof(float));
-    else
+    float *final=(layout_flags & DPDF_OUTPUT_FREQ_MAJOR)?output:x;
+    b->norm(final, p, mid, nos, nob, b->eps[1], f);
+#if DPDF_MODEL_SIZE == 2
+    if (!(layout_flags & DPDF_OUTPUT_FREQ_MAJOR)) {
+#ifdef DPDF_X86_DISPATCH
+        if (b->tier==DPDF_AVX2) dpdf_transpose_avx2(x,output,f,64);
+        else
+#endif
+#else
+    if (!(layout_flags & DPDF_OUTPUT_FREQ_MAJOR))
+#endif
         for (int r = 0; r < f; ++r)
             for (int c = 0; c < 64; ++c) output[c*f+r] = x[r*64+c];
+#if DPDF_MODEL_SIZE == 2
+    }
+#else
+#endif
     return 0;
 }
 

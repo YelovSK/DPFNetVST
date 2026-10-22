@@ -263,8 +263,9 @@ def main():
             aligned = mono[PIPELINE_DELAY: PIPELINE_DELAY + len(ref)]
             ref = ref[: len(aligned)]
             parity = snr_db(ref, aligned)
-            # The plugin runs DPDFNet's INT8 engine; its FP32 mode matches the reference to >130 dB.
-            ok = parity > 35
+            # The plugin runs DPDFNet's W7A8 engine (7-bit weights, fitted GRU gates), so it only
+            # approximates the FP32 reference; the SNR-vs-clean check below is the quality bar.
+            ok = parity > 30
             failures += not ok
             line = f"{label:28s} parity vs reference {parity:6.1f} dB {'OK' if ok else 'FAIL'}"
             line += f" | {elapsed / (len(noisy) / SR) * 100:5.1f}% of real time"

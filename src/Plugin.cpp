@@ -145,10 +145,7 @@ bool Plugin::updateModel()
 
 	try
 	{
-		const dpdf_native_api_v1* api = models[index].api(DPDF_NATIVE_ABI_VERSION);
-		if (api == nullptr)
-			throw std::runtime_error("Native model API version mismatch");
-		denoiser = std::make_unique<Denoiser>(*api, weightsPath(index));
+		denoiser = std::make_unique<Denoiser>(models[index].id, weightsPath(index));
 	}
 	catch (const std::exception& e)
 	{

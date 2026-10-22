@@ -1,16 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
-project(DPDFNetVST LANGUAGES C CXX RC)
+project(DPDFNetVST LANGUAGES C CXX ASM RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# DPDFNet's native C runtime and generated model code, vendored from the commit below.
+if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+	message(FATAL_ERROR "Build with clang-cl (build.cmd does): DPDFNet's assembly kernels need GNU assembler syntax and sysv_abi.")
+endif()
+
+# DPDFNet's optimized inference runtime, vendored from the commit below.
 # The weights are downloaded from the same commit.
-set(DPDF_COMMIT 6a5dbd3ea5dbea88c30a2be8e7c689b5eb26b533)
-set(DPDF_NATIVE_DIR ${CMAKE_SOURCE_DIR}/third_party/dpdfnet_native)
-set(WEIGHTS_URL https://raw.githubusercontent.com/ceva-ip/DPDFNet/${DPDF_COMMIT}/native_inference/artifacts/v1)
+set(DPDF_COMMIT afa8292f3b8083c3daadd06dbcfe4ff877dd3172)
+set(DPDF_DIR ${CMAKE_SOURCE_DIR}/third_party/dpdfnet)
+set(WEIGHTS_URL https://raw.githubusercontent.com/ceva-ip/DPDFNet/${DPDF_COMMIT}/optimized_inference/models)
 set(WEIGHTS_DIR ${CMAKE_BINARY_DIR}/weights)
 set(MODELS
 	"dpdfnet2_48khz_hr\;cb7248b8fccbff7b32f254ec2ed0061e604514b2ccd98d997cd081a876424e7b"
@@ -23,22 +27,59 @@ foreach(entry IN LISTS MODELS)
 	list(APPEND WEIGHT_FILES ${WEIGHTS_DIR}/${name}.weights.f32)
 endforeach()
 
-add_library(dpdf_native STATIC
-	${DPDF_NATIVE_DIR}/dpdfnet2_48khz_hr/generated_model.c
-	${DPDF_NATIVE_DIR}/dpdfnet8_48khz_hr/generated_model.c
-	${DPDF_NATIVE_DIR}/runtime/dpdf_dprnn.c
-	${DPDF_NATIVE_DIR}/runtime/full_ops.c
-	${DPDF_NATIVE_DIR}/runtime/extended_ops.c
-	${DPDF_NATIVE_DIR}/runtime/avx2.c
-	${DPDF_NATIVE_DIR}/runtime/fp16.c
-	${DPDF_NATIVE_DIR}/runtime/int8.c)
-target_include_directories(dpdf_native PUBLIC ${DPDF_NATIVE_DIR} ${DPDF_NATIVE_DIR}/runtime)
-# The AVX2 kernels are only called after a runtime CPU check.
-target_compile_definitions(dpdf_native PRIVATE DPDF_X86_DISPATCH)
-target_compile_options(dpdf_native PRIVATE /FI${DPDF_NATIVE_DIR}/msvc_compat.h /W3 /wd4244 /wd4267 /wd4305 /wd4068 /wd4556)
-set_source_files_properties(
-	${DPDF_NATIVE_DIR}/runtime/avx2.c ${DPDF_NATIVE_DIR}/runtime/fp16.c ${DPDF_NATIVE_DIR}/runtime/int8.c
-	PROPERTIES COMPILE_OPTIONS /arch:AVX2)
+# The kernels are written for Linux; COFF has no ELF symbol types, sizes, visibility or stack notes,
+# and these leaf functions need no unwind info. Copies without those directives go in the build tree.
+function(dpdf_coff_asm out_var)
+	set(outputs)
+	foreach(source IN LISTS ARGN)
+		set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DPDF_DIR}/src/${source})
+		file(READ ${DPDF_DIR}/src/${source} text)
+		string(REGEX REPLACE "\n[ \t]*\\.(type|size|hidden|cfi_[a-z_]+|section[ \t]+\\.note\\.GNU-stack)[^\n]*" "" text "\n${text}")
+		set(output ${CMAKE_BINARY_DIR}/dpdf_asm/${source})
+		file(WRITE ${output}.tmp "${text}")
+		file(COPY_FILE ${output}.tmp ${output} ONLY_IF_DIFFERENT)
+		list(APPEND outputs ${output})
+	endforeach()
+	set(${out_var} ${outputs} PARENT_SCOPE)
+endfunction()
+
+# Each model compiles the shared sources once, with its own symbol prefix.
+foreach(size IN ITEMS 2 8)
+	set(model dpdfnet${size}_48khz_hr)
+	set(asm common/qdot64_fixed_avx2.S common/qdot4pair_fixed_avx2.S models/${model}/qaffine64_fused_avx2.S)
+	set(kernels DPDF_QASM64 DPDF_QFUSED64 DPDF_QPAIR_FIXED)
+	if(size EQUAL 2)
+		list(APPEND asm models/${model}/qaffine256_fused_avx2.S models/${model}/qaffine4pair64_fused_avx2.S)
+		list(APPEND kernels DPDF_QFUSED256 DPDF_QPAIR_FUSED64)
+	endif()
+	dpdf_coff_asm(asm_sources ${asm})
+	add_library(dpdf_backend${size} OBJECT
+		${DPDF_DIR}/src/model_backend.c
+		${DPDF_DIR}/src/models/${model}/generated_model.c
+		${DPDF_DIR}/src/common/full_ops.c
+		${DPDF_DIR}/src/common/dpdf_dprnn.c
+		${DPDF_DIR}/src/common/avx2.c
+		${DPDF_DIR}/src/common/int8.c
+		${DPDF_DIR}/src/common/extended_ops.c
+		${DPDF_DIR}/src/common/fp16.c
+		${asm_sources})
+	target_include_directories(dpdf_backend${size} PRIVATE ${DPDF_DIR}/include ${DPDF_DIR}/src ${DPDF_DIR}/src/private)
+	target_compile_definitions(dpdf_backend${size} PRIVATE DPDF_MODEL_SIZE=${size} DPDF_X86_DISPATCH ${kernels})
+	target_compile_options(dpdf_backend${size} PRIVATE
+		/FI${DPDF_DIR}/src/private/namespace${size}.h
+		$<$<COMPILE_LANGUAGE:C>:/FI${DPDF_DIR}/windows_abi.h /clang:-ffp-contract=off>)
+endforeach()
+# The AVX2 code is only called after a runtime CPU check.
+set_source_files_properties(${DPDF_DIR}/src/common/avx2.c ${DPDF_DIR}/src/common/int8.c
+	PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+set_source_files_properties(${DPDF_DIR}/src/common/fp16.c PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+
+add_library(dpdfnet_runtime STATIC ${DPDF_DIR}/src/runtime.c $<TARGET_OBJECTS:dpdf_backend2> $<TARGET_OBJECTS:dpdf_backend8>)
+target_include_directories(dpdfnet_runtime PUBLIC ${DPDF_DIR}/include)
+# __builtin_cpu_supports lives in clang's runtime library, which clang-cl doesn't link by default.
+execute_process(COMMAND ${CMAKE_C_COMPILER} /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name
+	OUTPUT_VARIABLE CLANG_BUILTINS OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+target_link_libraries(dpdfnet_runtime PRIVATE ${CLANG_BUILTINS})
 
 add_library(DPDFNet SHARED
 	src/Denoiser.cpp
@@ -48,8 +89,8 @@ add_library(DPDFNet SHARED
 	src/resources.rc)
 target_include_directories(DPDFNet PRIVATE third_party/pocketfft)
 target_compile_definitions(DPDFNet PRIVATE NOMINMAX UNICODE _UNICODE)
-target_compile_options(DPDFNet PRIVATE /W4 /utf-8)
-target_link_libraries(DPDFNet PRIVATE dpdf_native comctl32)
+target_compile_options(DPDFNet PRIVATE /W4 /utf-8 -Wno-missing-field-initializers)
+target_link_libraries(DPDFNet PRIVATE dpdfnet_runtime comctl32)
 # The manifest is embedded via resources.rc for ISOLATION_AWARE_ENABLED.
 target_link_options(DPDFNet PRIVATE /MANIFEST:NO)
 
@@ -62,4 +103,4 @@ set_target_properties(DPDFNet PROPERTIES
 add_custom_command(TARGET DPDFNet POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGIN_DIR}/DPDFNet
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WEIGHT_FILES} ${PLUGIN_DIR}/DPDFNet
-	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DPDF_NATIVE_DIR}/LICENSE ${PLUGIN_DIR}/DPDFNet/DPDFNet-LICENSE.txt)
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DPDF_DIR}/LICENSE ${PLUGIN_DIR}/DPDFNet/DPDFNet-LICENSE.txt)

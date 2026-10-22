@@ -24,17 +24,19 @@ namespace
 	}
 }
 
-Denoiser::Denoiser(const dpdf_native_api_v1& api, const std::filesystem::path& weightsPath)
-	: api(api), state(api.state_size), spec(freqBins * 2), specOut(freqBins * 2), inFrame(winLen),
-	  outFrame(winLen), overlap(winLen), outQueue(hopLen), noisyHistory(modelDelayFrames * freqBins * 2)
+Denoiser::Denoiser(dpdfnet_model_id id, const std::filesystem::path& weightsPath)
+	: id(id), spec(freqBins * 2), specOut(freqBins * 2), inFrame(winLen), outFrame(winLen), overlap(winLen),
+	  outQueue(hopLen), noisyHistory(modelDelayFrames * freqBins * 2)
 {
-	if (api.sample_rate != sampleRate || api.hop_size != hopLen || api.spectrum_size != spec.size())
+	const dpdfnet_model_info* info = dpdfnet_get_model_info(id);
+	if (info->sample_rate != sampleRate || info->hop_samples != hopLen || info->spectrum_floats != spec.size())
 		throw std::runtime_error("Model doesn't match the 48 kHz DPDFNet framing");
+	if (!dpdfnet_cpu_supported())
+		throw std::runtime_error("DPDFNet needs a CPU with AVX2 and FMA");
 
-	const std::vector<float> weights = readWeights(weightsPath, api.weight_count);
-	const uint32_t preset =
-		api.preset_supported(DPDF_PRESET_INT8_SELECTIVE) ? DPDF_PRESET_INT8_SELECTIVE : DPDF_PRESET_FP32;
-	model = api.create(weights.data(), weights.size(), preset);
+	state.resize(info->state_floats);
+	const std::vector<float> weights = readWeights(weightsPath, info->weight_floats);
+	model = dpdfnet_create(id, weights.data(), weights.size());
 	if (model == nullptr)
 		throw std::runtime_error("Could not create the model from " + weightsPath.string());
 
@@ -46,12 +48,12 @@ Denoiser::Denoiser(const dpdf_native_api_v1& api, const std::filesystem::path& w
 
 Denoiser::~Denoiser()
 {
-	api.destroy(model);
+	dpdfnet_destroy(model);
 }
 
 void Denoiser::reset()
 {
-	api.init_state(state.data());
+	dpdfnet_init_state(id, state.data());
 	std::fill(inFrame.begin(), inFrame.end(), 0.0f);
 	std::fill(overlap.begin(), overlap.end(), 0.0f);
 	std::fill(noisyHistory.begin(), noisyHistory.end(), 0.0f);
@@ -85,7 +87,7 @@ void Denoiser::processFrame()
 {
 	stft.forward(inFrame.data(), spec.data());
 
-	api.process(model, spec.data(), state.data(), specOut.data(), state.data());
+	dpdfnet_process(model, spec.data(), state.data(), specOut.data(), state.data());
 
 	// The enhanced frame lags the input by modelDelayFrames, so the noisy frame mixed back in is
 	// the one from that many frames ago.

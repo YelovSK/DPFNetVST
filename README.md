@@ -4,7 +4,7 @@ A VST2 plugin for Windows running [DPDFNet](https://github.com/ceva-ip/DPDFNet) 
 
 ## Build & install
 
-Needs Visual Studio (C++ workload), CMake and Ninja. The model weights are downloaded at configure time.
+Needs Visual Studio (C++ workload), LLVM (`winget install LLVM.LLVM`, for clang-cl), CMake and Ninja. The model weights are downloaded at configure time.
 
 ```
 build.cmd
@@ -21,7 +21,7 @@ VSTPlugin: Library DPDFNet.dll Model 1 "Attenuation limit" 1
 
 ## Parameters
 
-- **Model**: `0` = DPDFNet-2 (about 9% of one CPU core), `1` = DPDFNet-8 (better quality, about 25%).
+- **Model**: `0` = DPDFNet-2, `1` = DPDFNet-8 (better quality, a bit over twice the CPU cost).
 - **Attenuation limit**: maximum noise reduction, stored as dB / 100 (`0.12` = 12 dB). `1` = no limit. Lower values keep more of the original sound, like DeepFilterNet's setting of the same name.
 
 ## Behavior
@@ -29,13 +29,14 @@ VSTPlugin: Library DPDFNet.dll Model 1 "Attenuation limit" 1
 - The device must run at 48 kHz; at other rates the plugin passes audio through untouched.
 - Inputs are mixed to mono, denoised once, and written to both outputs. Unconnected inputs (a mono mic) aren't mixed in.
 - Latency is 60 ms: 20 ms of STFT framing plus 40 ms of model delay.
-- On CPUs with AVX2 and FMA the model runs with INT8 matrices, which halves the CPU cost; output quality matches the original ONNX model (see `tests/compare.py`). Other CPUs fall back to the slower FP32 path.
+- Runs on DPDFNet's optimized runtime: 7-bit weights, 8-bit activations and hand-written AVX2 assembly, ported from Linux. Needs a CPU with AVX2 and FMA. Denoising quality matches the original ONNX model (see `tests/compare.py`).
 
 ## Tests
 
 ```
 uv run tests/compare.py            # plugin vs. a numpy/ONNX port of the reference streamer, latency, bypass
 uv run tests/editor_snapshot.py    # renders the settings panel to tests/out/editor.png
+pwsh tests/contracts.ps1           # upstream's assembly kernel contract tests, built for Windows
 ```
 
 `compare.py` synthesizes test speech with Windows TTS, or takes a 48 kHz WAV as an argument. Outputs land in `tests/out`.

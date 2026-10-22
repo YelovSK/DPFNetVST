@@ -8,6 +8,7 @@ typedef void (*dpdf_norm_fn)(float *,const float *,const float *,const float *,c
 void dpdf_affine_scalar(const float *, const float *, const float *, float *, int, int, int);
 void dpdf_gates_scalar(const float *, const float *, const float *, float *, int);
 #ifdef DPDF_X86_DISPATCH
+void dpdf_transpose_avx2(const float *,float *,int,int);
 typedef struct dpdf_qmatrix dpdf_qmatrix;
 dpdf_qmatrix *dpdf_qcreate(const float *, int, int);
 void dpdf_qdestroy(dpdf_qmatrix *);
