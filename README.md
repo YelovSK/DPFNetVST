@@ -11,6 +11,12 @@ build.cmd
 install.cmd
 ```
 
+Or skip the toolchain: every push to `main` builds the plugin on GitHub Actions. Fetch the latest build into `build\plugin` and run `install.cmd`:
+
+```
+gh run download -n DPDFNet -D build\plugin
+```
+
 `install.cmd` copies `build\plugin\DPDFNet.dll` and the `DPDFNet` folder next to it (model weights) into `C:\Program Files\EqualizerAPO\VSTPlugins`. The folder must stay next to the DLL.
 
 Then add it to the device's config in Equalizer APO, either through the Editor (add a VST plugin, pick `DPDFNet.dll`, open its panel) or by hand:
