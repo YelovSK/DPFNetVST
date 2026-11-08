@@ -19,8 +19,8 @@ cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1 && set" | ForEach-Obje
 $builtins = & $clang /clang:--rtlib=compiler-rt /clang:-print-libgcc-file-name
 
 $tests = @{
-	2 = 'full extended layout generated_gru conv_helpers int8 int8_dispatch fused pair wide pair_fused'
-	8 = 'full extended layout generated_gru conv_helpers int8 int8_dispatch fused pair'
+	2 = 'full extended layout generated_gru conv_helpers depthwise int8 int8_dispatch fused pair wide pair_fused'
+	8 = 'full extended layout generated_gru conv_helpers depthwise int8 int8_dispatch fused pair pair_fused'
 }
 New-Item -ItemType Directory -Force "$out\tests", "$out\tools" | Out-Null
 $base = "https://raw.githubusercontent.com/ceva-ip/DPDFNet/$commit/optimized_inference"
@@ -34,7 +34,9 @@ foreach ($name in ($tests[2] -split ' ') + 'public') {
 	Set-Content "$out\tests\${name}_contract.c" $source -NoNewline
 }
 
+# The scalar oracles must keep their ordered multiply/add operations.
 $flags = @('/nologo', '/O2', '/MT', '/std:c11', '/clang:-ffp-contract=off', '/clang:-frounding-math',
+	'/clang:-fno-vectorize', '/clang:-fno-slp-vectorize',
 	'-mavx2', '-mfma', '-mf16c', '-Wno-everything', "/I$dpdf\include", "/I$dpdf\src", "/I$dpdf\src\private",
 	"/I$PSScriptRoot\posix_shim", '/DDPDF_X86_DISPATCH', '/DDPDF_CONV_PAIR', "/Fo$out\")
 $failures = 0

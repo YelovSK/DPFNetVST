@@ -12,7 +12,7 @@ endif()
 
 # DPDFNet's optimized inference runtime, vendored from the commit below.
 # The weights are downloaded from the same commit.
-set(DPDF_COMMIT afa8292f3b8083c3daadd06dbcfe4ff877dd3172)
+set(DPDF_COMMIT 98df76589cdf7787553b9e05a112d5820e6c8db6)
 set(DPDF_DIR ${CMAKE_SOURCE_DIR}/third_party/dpdfnet)
 set(WEIGHTS_URL https://raw.githubusercontent.com/ceva-ip/DPDFNet/${DPDF_COMMIT}/optimized_inference/models)
 set(WEIGHTS_DIR ${CMAKE_BINARY_DIR}/weights)
@@ -48,9 +48,13 @@ foreach(size IN ITEMS 2 8)
 	set(model dpdfnet${size}_48khz_hr)
 	set(asm common/qdot64_fixed_avx2.S common/qdot4pair_fixed_avx2.S models/${model}/qaffine64_fused_avx2.S)
 	set(kernels DPDF_QASM64 DPDF_QFUSED64 DPDF_QPAIR_FIXED)
+	# Model 8 borrows model 2's fused-pair kernel for its batched affines.
+	list(APPEND asm models/dpdfnet2_48khz_hr/qaffine4pair64_fused_avx2.S)
 	if(size EQUAL 2)
-		list(APPEND asm models/${model}/qaffine256_fused_avx2.S models/${model}/qaffine4pair64_fused_avx2.S)
+		list(APPEND asm models/${model}/qaffine256_fused_avx2.S)
 		list(APPEND kernels DPDF_QFUSED256 DPDF_QPAIR_FUSED64)
+	else()
+		list(APPEND kernels DPDF_QBATCH_FUSED64_AVX2)
 	endif()
 	dpdf_coff_asm(asm_sources ${asm})
 	add_library(dpdf_backend${size} OBJECT
@@ -67,8 +71,10 @@ foreach(size IN ITEMS 2 8)
 	target_compile_definitions(dpdf_backend${size} PRIVATE DPDF_MODEL_SIZE=${size} DPDF_X86_DISPATCH ${kernels})
 	target_compile_options(dpdf_backend${size} PRIVATE
 		/FI${DPDF_DIR}/src/private/namespace${size}.h
-		$<$<COMPILE_LANGUAGE:C>:/FI${DPDF_DIR}/windows_abi.h /clang:-ffp-contract=off>)
+		$<$<COMPILE_LANGUAGE:C>:/FI${DPDF_DIR}/windows_abi.h /clang:-ffp-contract=off /clang:-fno-math-errno>)
 endforeach()
+# Upstream only measured a gain from branch alignment on model 8.
+target_compile_options(dpdf_backend8 PRIVATE /clang:-mbranches-within-32B-boundaries)
 # The AVX2 code is only called after a runtime CPU check.
 set_source_files_properties(${DPDF_DIR}/src/common/avx2.c ${DPDF_DIR}/src/common/int8.c
 	PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
