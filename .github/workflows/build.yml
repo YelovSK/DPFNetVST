@@ -3,11 +3,14 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -23,3 +26,12 @@ jobs:
         with:
           name: DPDFNet
           path: build/plugin/
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path build/plugin/* -DestinationPath DPDFNet.zip
+          gh release create $env:GITHUB_REF_NAME DPDFNet.zip --generate-notes
