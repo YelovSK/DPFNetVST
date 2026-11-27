@@ -7,6 +7,8 @@ if not defined VSDIR (
 	exit /b 1
 )
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 || exit /b 1
+rem Visual Studio's own clang-cl always matches the version its STL requires.
+if exist "%VSDIR%\VC\Tools\Llvm\x64\bin\clang-cl.exe" set CLANG=%VSDIR%\VC\Tools\Llvm\x64\bin\clang-cl.exe
 for /f "delims=" %%i in ('where clang-cl 2^>nul') do if not defined CLANG set CLANG=%%i
 if not defined CLANG if exist "%ProgramFiles%\LLVM\bin\clang-cl.exe" set CLANG=%ProgramFiles%\LLVM\bin\clang-cl.exe
 if not defined CLANG (
