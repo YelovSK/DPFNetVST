@@ -109,4 +109,5 @@ set_target_properties(DPDFNet PROPERTIES
 add_custom_command(TARGET DPDFNet POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGIN_DIR}/DPDFNet
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WEIGHT_FILES} ${PLUGIN_DIR}/DPDFNet
-	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DPDF_DIR}/LICENSE ${PLUGIN_DIR}/DPDFNet/DPDFNet-LICENSE.txt)
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DPDF_DIR}/LICENSE ${PLUGIN_DIR}/DPDFNet/DPDFNet-LICENSE.txt
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/third_party/pocketfft/LICENSE.md ${PLUGIN_DIR}/DPDFNet/pocketfft-LICENSE.txt)
